@@ -25,6 +25,7 @@ class SampleRunner(object):
         self.grad_method = self.grad_method_arr[0]
         self.device = th.device(args.device)
         self.schedule = Schedule(args, config['Schedule'], self.grad_method)
+        self.real_seq = None
         log_info(f"SampleRunner()...")
         log_info(f"  num_step_arr   : {self.num_step_arr}")
         log_info(f"  grad_method_arr: {self.grad_method_arr}")
@@ -50,10 +51,46 @@ class SampleRunner(object):
             for grad_method in self.grad_method_arr:
                 self.grad_method = grad_method
                 self.schedule = Schedule(self.args, self.config['Schedule'], self.grad_method)
-                key, avg, std = self.sample_fid_times()
+                log_info(f"SampleRunner::sample_baseline() new schedule with: {self.grad_method}")
+                key, avg, std = self.sample_times()
                 dtstr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 fid_arr.append([dtstr, avg, std, key])
                 save_result(msg_arr, fid_arr)
+            # for
+        # for
+
+    def alpha_bar_all(self):
+        def save_ab_file(file_path):
+            ts_list = self.real_seq
+            ts_list = th.tensor(ts_list).to(self.device)
+            ab_list = self.schedule.ts2ab(ts_list)
+            ab_list = ab_list.squeeze(1)
+            if len(ab_list) != self.num_step:
+                raise Exception(f"alpha_bar count {len(ab_list)} not match steps {self.num_step}")
+            with open(file_path, 'w') as f_ptr:
+                f_ptr.write(f"# num_step   : {self.num_step}\n")
+                f_ptr.write(f"# grad_method: {self.grad_method}\n")
+                f_ptr.write(f"\n")
+                f_ptr.write(f"# alpha_bar : index\n")
+                for ab, ts in zip(ab_list, ts_list):
+                    f_ptr.write(f"{ab:.8f}  : {ts:10.5f}\n")
+            # with
+        # def
+        ab_dir = self.args.ab_original_dir or '.'
+        if not os.path.exists(ab_dir):
+            log_info(f"os.makedirs({ab_dir})")
+            os.makedirs(ab_dir)
+        for num_step in self.num_step_arr:
+            self.num_step = num_step
+            for grad_method in self.grad_method_arr:
+                self.grad_method = grad_method
+                self.schedule = Schedule(self.args, self.config['Schedule'], self.grad_method)
+                log_info(f"SampleRunner::alpha_bar_all() new schedule with: {self.grad_method}")
+                self.sample(total_num=1)
+                key = self.config_key_str()
+                f_path = os.path.join(ab_dir, f"{key}.txt")
+                save_ab_file(f_path)
+                log_info(f"File saved: {f_path}")
             # for
         # for
 
@@ -61,14 +98,57 @@ class SampleRunner(object):
         ks = f"s{self.num_step:02d}_{self.grad_method}"
         return ks
 
-    def sample_fid_times(self, times=None):
+    @staticmethod
+    def load_predefined_aap(f_path: str, meta_dict=None):
+        if not os.path.exists(f_path):
+            raise Exception(f"File not found: {f_path}")
+        if not os.path.isfile(f_path):
+            raise Exception(f"Not file: {f_path}")
+        if meta_dict is None:
+            meta_dict = {}
+        log_info(f"Load file: {f_path}")
+        with open(f_path, 'r') as f_ptr:
+            lines = f_ptr.readlines()
+        cnt_empty = 0
+        cnt_comment = 0
+        ab_arr = []  # alpha_bar array
+        ts_arr = []  # timestep array
+        for line in lines:
+            line = line.strip()
+            if line == '':
+                cnt_empty += 1
+                continue
+            if line.startswith('#'):  # line is like "# order     : 2"
+                cnt_comment += 1
+                arr = line[1:].strip().split(':')
+                key = arr[0].strip()
+                if key in meta_dict: meta_dict[key] = arr[1].strip()
+                continue
+            arr = line.split(':')
+            ab, ts = float(arr[0]), float(arr[1])
+            ab_arr.append(ab)
+            ts_arr.append(ts)
+        ab2s = lambda ff: ' '.join([f"{f:8.6f}" for f in ff])
+        ts2s = lambda ff: ' '.join([f"{f:10.5f}" for f in ff])
+        log_info(f"  cnt_empty  : {cnt_empty}")
+        log_info(f"  cnt_comment: {cnt_comment}")
+        log_info(f"  cnt_valid  : {len(ab_arr)}")
+        log_info(f"  ab[:5]     : [{ab2s(ab_arr[:5])}]")
+        log_info(f"  ab[-5:]    : [{ab2s(ab_arr[-5:])}]")
+        log_info(f"  ts[:5]     : [{ts2s(ts_arr[:5])}]")
+        log_info(f"  ts[-5:]    : [{ts2s(ts_arr[-5:])}]")
+        for k, v in meta_dict.items():
+            log_info(f"  {k:11s}: {v}")
+        return ab_arr, ts_arr
+
+    def sample_times(self, times=None, aap_file=None):
         args = self.args
         times = times or args.repeat_times
         fid_arr = []
         input1, input2 = args.fid_input1 or 'cifar10-train', args.sample_output_dir
         ss = self.config_key_str()
         for i in range(times):
-            self.sample()
+            self.sample(aap_file=aap_file)
             log_info(f"{ss}-{i}/{times} => FID calculating...")
             log_info(f"  input1: {input1}")
             log_info(f"  input2: {input2}")
@@ -89,7 +169,7 @@ class SampleRunner(object):
         avg, std = np.mean(fid_arr), np.std(fid_arr)
         return ss, avg, std
 
-    def sample(self):
+    def sample(self, total_num=None, aap_file=None):
         args = self.args
         image_dir = self.args.sample_output_dir
         if not os.path.exists(image_dir):
@@ -100,18 +180,37 @@ class SampleRunner(object):
         pflow = True if self.grad_method == 'PF' else False
 
         b_sz = args.sample_batch_size
-        total_num = args.sample_count
+        total_num = total_num or args.sample_count
 
-        skip = self.diffusion_step // self.num_step
-        seq = range(0, self.diffusion_step, skip)
+        if aap_file:
+            meta_dict = {"num_step": None, "grad_method": None}
+            ab_arr, _ = self.load_predefined_aap(aap_file, meta_dict)
+            self.num_step = int(meta_dict['num_step'])
+            self.grad_method = meta_dict['grad_method']
+            ab_arr_tensor = th.tensor(ab_arr, device=self.device)
+            ts_arr_tensor = self.schedule.ab2ts(ab_arr_tensor)
+            ts_arr_tensor = ts_arr_tensor.squeeze(1).cpu().numpy()
+            seq_full = np.append([0], ts_arr_tensor)
+        else:
+            # if num_step is 15, then skip will be 66.
+            # and range(0, self.diffusion_step, skip) will have 16 elements
+            # So here we do not use builtin range() but to use np.linspace()
+            # skip = self.diffusion_step // self.num_step
+            tmp = np.linspace(0, 1000, num=self.num_step, endpoint=False)
+            seq_full = np.append(tmp, [999])
+        seq = seq_full[1:]
+        seq_next = seq_full[:-1]
+        self.real_seq = seq
         log_info(f"SampleRunner::sample()...")
         log_info(f"  grad_method   : {self.grad_method}")
         log_info(f"  num_step      : {self.num_step}")
         log_info(f"  diffusion_step: {self.diffusion_step}")
-        log_info(f"  skip          : {skip}")
-        log_info(f"  seq length    : {len(seq)}")
-        log_info(f"  seq[0]        : {seq[0]}")
-        log_info(f"  seq[-1]       : {seq[-1]}")
+        log_info(f"  seq.len       : {len(seq)}")
+        log_info(f"  seq[0]        : {seq[0]:.6f}")
+        log_info(f"  seq[-1]       : {seq[-1]:.6f}")
+        log_info(f"  seq_next.len  : {len(seq_next)}")
+        log_info(f"  seq_next[0]   : {seq_next[0]:.6f}")
+        log_info(f"  seq_next[-1]  : {seq_next[-1]:.6f}")
 
         dc = self.config['Dataset']  # dataset config
         ch, h, w = dc['channels'], dc['image_size'], dc['image_size']
@@ -126,7 +225,7 @@ class SampleRunner(object):
             method._batch_idx = b_idx
             s = b_sz if b_idx+1 < b_cnt else total_num - b_idx * b_sz
             noise = th.randn(s, ch, h, w, device=self.device)
-            img = self.sample_image_from_noise(noise, seq, model, pflow)
+            img = self.sample_image_from_noise(noise, seq, seq_next, model, pflow)
             img = inverse_data_transform(dc, img)
             start_num = b_idx * b_sz
             img_path = None
@@ -138,7 +237,7 @@ class SampleRunner(object):
             log_info(f"  saved {s} images: {img_path}")
         # for
 
-    def sample_image_from_noise(self, noise, seq, model, pflow=False):
+    def sample_image_from_noise(self, noise, seq, seq_next, model, pflow=False):
         with th.no_grad():
             if pflow:
                 shape = noise.shape
@@ -157,8 +256,6 @@ class SampleRunner(object):
 
             else:
                 imgs = [noise]
-                seq_next = [-1] + list(seq[:-1])
-
                 start = True
                 n = noise.shape[0]
 

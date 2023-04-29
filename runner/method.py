@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
-import copy
 import torch as th
 
 from utils import log_info
@@ -34,7 +32,7 @@ def choose_method(name):
         return None
 
 
-def gen_pflow(img, t, t_next, model, betas, total_step):
+def gen_pflow(img, t, _, model, betas, total_step):
     n = img.shape[0]
     beta_0, beta_1 = betas[0], betas[-1]
 
@@ -148,11 +146,18 @@ def gen_order_1(img, t, t_next, model, alphas_cump, ets):
 
 
 def transfer(x, t, t_next, et, alphas_cump):
-    at = alphas_cump[t.long() + 1].view(-1, 1, 1, 1)
-    at_next = alphas_cump[t_next.long() + 1].view(-1, 1, 1, 1)
+    if callable(alphas_cump):
+        at      = alphas_cump(t)
+        at_next = alphas_cump(t_next)
+    else:
+        at      = alphas_cump[t.long()]
+        at_next = alphas_cump[t_next.long()]
+    at = at.view(-1, 1, 1, 1)
+    at_next = at_next.view(-1, 1, 1, 1)
     global _batch_idx
     if _batch_idx == 0:
-        log_info(f"method::transfer() a_t: {at[0][0][0][0]:.6f}, t:{t[0].long()+1}")
+        log_info(f"method::transfer() a_t: {at[0][0][0][0]:.8f}, t:{t[0]:8.4f}; "
+                 f"at_next: {at_next[0][0][0][0]:.8f}, t_next:{t_next[0]:8.4f}")
 
     # see Eq-9 in paper.
     part1 = 1 / (at.sqrt() * (at.sqrt() + at_next.sqrt())) * x
