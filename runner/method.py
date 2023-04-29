@@ -16,6 +16,8 @@ import sys
 import copy
 import torch as th
 
+from utils import log_info
+_batch_idx = None  # only for fetching alpha_bar values
 
 def choose_method(name):
     if name == 'DDIM':
@@ -148,9 +150,14 @@ def gen_order_1(img, t, t_next, model, alphas_cump, ets):
 def transfer(x, t, t_next, et, alphas_cump):
     at = alphas_cump[t.long() + 1].view(-1, 1, 1, 1)
     at_next = alphas_cump[t_next.long() + 1].view(-1, 1, 1, 1)
+    global _batch_idx
+    if _batch_idx == 0:
+        log_info(f"method::transfer() a_t: {at[0][0][0][0]:.6f}, t:{t[0].long()+1}")
 
-    x_delta = (at_next - at) * ((1 / (at.sqrt() * (at.sqrt() + at_next.sqrt()))) * x - \
-                                1 / (at.sqrt() * (((1 - at_next) * at).sqrt() + ((1 - at) * at_next).sqrt())) * et)
+    # see Eq-9 in paper.
+    part1 = 1 / (at.sqrt() * (at.sqrt() + at_next.sqrt())) * x
+    part2 = 1 / (at.sqrt() * (((1 - at_next) * at).sqrt() + ((1 - at) * at_next).sqrt())) * et
+    x_delta = (at_next - at) * (part1 - part2)
 
     x_next = x + x_delta
     return x_next

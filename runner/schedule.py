@@ -48,7 +48,7 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
 
 
 class Schedule(object):
-    def __init__(self, args, config):
+    def __init__(self, args, config, gradient_method):
         device = th.device(args.device)
         betas, alphas_cump = get_schedule(args, config)
 
@@ -56,7 +56,7 @@ class Schedule(object):
         self.alphas_cump_pre = th.cat([th.ones(1).to(device), self.alphas_cump[:-1]], dim=0)
         self.total_step = config['diffusion_step']
 
-        self.method = mtd.choose_method(args.method)  # add pflow
+        self.method = mtd.choose_method(gradient_method)  # add pflow
         self.ets = None
 
     def diffusion(self, img, t_end, t_start=0, noise=None):
