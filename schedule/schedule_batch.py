@@ -51,11 +51,14 @@ class ScheduleBatch:
     # schedule_batch()
 
     def schedule_single(self, f_path, lr, lp, order=1):
+        log_fn(f"schedule_batch::schedule_single()...")
+        log_fn(f"  f_path     : {f_path}")
         if not os.path.exists(self.output_dir):
-            log_fn(f"os.makedirs({self.output_dir})")
+            log_fn(f"  os.makedirs({self.output_dir})")
             os.makedirs(self.output_dir)
         m_arr = [f"lr           : {lr}",
                  f"lp           : {lp}",
+                 f"order        : {order}",
                  f"n_epochs     : {self.n_epochs}",
                  f"aa_low       : {self.aa_low}",
                  f"aa_low_lambda: {self.aa_low_lambda}",

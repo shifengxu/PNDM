@@ -50,8 +50,6 @@ class SampleRunner(object):
             self.num_step = num_step
             for grad_method in self.grad_method_arr:
                 self.grad_method = grad_method
-                self.schedule = Schedule(self.args, self.config['Schedule'], self.grad_method)
-                log_info(f"SampleRunner::sample_baseline() new schedule with: {self.grad_method}")
                 key, avg, std = self.sample_times()
                 dtstr = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                 fid_arr.append([dtstr, avg, std, key])
@@ -84,8 +82,6 @@ class SampleRunner(object):
             self.num_step = num_step
             for grad_method in self.grad_method_arr:
                 self.grad_method = grad_method
-                self.schedule = Schedule(self.args, self.config['Schedule'], self.grad_method)
-                log_info(f"SampleRunner::alpha_bar_all() new schedule with: {self.grad_method}")
                 self.sample(total_num=1)
                 key = self.config_key_str()
                 f_path = os.path.join(ab_dir, f"{key}.txt")
@@ -149,6 +145,7 @@ class SampleRunner(object):
         ss = self.config_key_str()
         for i in range(times):
             self.sample(aap_file=aap_file)
+            ss = self.config_key_str()  # get ss again as config may change due to aap_file.
             log_info(f"{ss}-{i}/{times} => FID calculating...")
             log_info(f"  input1: {input1}")
             log_info(f"  input2: {input2}")
@@ -201,6 +198,7 @@ class SampleRunner(object):
         seq = seq_full[1:]
         seq_next = seq_full[:-1]
         self.real_seq = seq
+        self.schedule = Schedule(self.args, self.config['Schedule'], self.grad_method)
         log_info(f"SampleRunner::sample()...")
         log_info(f"  grad_method   : {self.grad_method}")
         log_info(f"  num_step      : {self.num_step}")
@@ -211,6 +209,7 @@ class SampleRunner(object):
         log_info(f"  seq_next.len  : {len(seq_next)}")
         log_info(f"  seq_next[0]   : {seq_next[0]:.6f}")
         log_info(f"  seq_next[-1]  : {seq_next[-1]:.6f}")
+        log_info(f"  new schedule  : {self.grad_method}")
 
         dc = self.config['Dataset']  # dataset config
         ch, h, w = dc['channels'], dc['image_size'], dc['image_size']
